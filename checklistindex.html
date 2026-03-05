@@ -1,0 +1,405 @@
+import React, { useState, useEffect } from 'react';
+import { initializeApp } from 'firebase/app';
+import { 
+  getAuth, 
+  signInWithCustomToken, 
+  signInAnonymously, 
+  onAuthStateChanged 
+} from 'firebase/auth';
+import { 
+  getFirestore, 
+  doc, 
+  setDoc, 
+  onSnapshot, 
+  collection 
+} from 'firebase/firestore';
+import { 
+  CheckCircle2, 
+  Circle, 
+  ClipboardCheck, 
+  FileText, 
+  ShieldAlert, 
+  BadgeDollarSign, 
+  Gavel, 
+  CheckSquare,
+  RotateCcw,
+  Printer,
+  ChevronDown,
+  ChevronUp,
+  Cloud,
+  CloudOff,
+  Search,
+  Save,
+  Loader2,
+  MessageSquare,
+  PencilLine
+} from 'lucide-react';
+
+// Firebase Configuration from environment
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+const initialItems = [
+  // Fase 1: Planeamento
+  { id: 1, section: 'planning', label: 'Criação do Processo no Sistema', completed: false, notes: '', description: 'Inserir número, unidade e documentação inicial.' },
+  { id: 2, section: 'planning', label: 'DFD - Doc. Formalização de Demanda', completed: false, notes: '', description: 'Documento que justifica a necessidade da compra.' },
+  { id: 3, section: 'planning', label: 'Análise de ETP (Estudo Técnico Preliminar)', completed: false, notes: '', description: 'Verificar se o objecto exige estudo prévio detalhado.' },
+  { id: 4, section: 'planning', label: 'Mapa de Riscos', completed: false, notes: '', description: 'Identificação e mitigação de riscos da contratação.' },
+  { id: 5, section: 'planning', label: 'TR - Termo de Referência Assinado', completed: false, notes: '', description: 'Documento base com especificações técnicas.' },
+  
+  // Fase 2: Orçamentação
+  { id: 6, section: 'budget', label: 'Pesquisa de Preços (Mín. 3 orçamentos)', completed: false, notes: '', description: 'Levantamento de mercado ou painel de preços.' },
+  { id: 7, section: 'budget', label: 'Mapa Comparativo de Preços', completed: false, notes: '', description: 'Quadro demonstrativo da média/menor preço.' },
+  { id: 8, section: 'budget', label: 'Documento de Dotação Orçamentária', completed: false, notes: '', description: 'Reserva de verba aprovada pelo financeiro.' },
+  
+  // Fase 3: Validação Técnica
+  { id: 9, section: 'technical', label: 'Parecer CODATA (Obrigatório para TIC)', completed: false, notes: '', description: 'Apenas para compras de hardware, software ou redes.' },
+  { id: 10, section: 'technical', label: 'Parecer Técnico do Órgão', completed: false, notes: '', description: 'Validação da equipa técnica sobre o objecto.' },
+  
+  // Fase 4: Governança
+  { id: 11, section: 'governance', label: 'Análise GECAP (Comitê Gestor)', completed: false, notes: '', description: 'Verificação de conformidade do processo.' },
+  { id: 12, section: 'governance', label: 'Autorização do Presidente do Comitê', completed: false, notes: '', description: 'Assinatura eletrónica de aprovação.' },
+  { id: 13, section: 'governance', label: 'Autorização da Autoridade Máxima', completed: false, notes: '', description: 'Assinatura do ordenador de despesas (Secretário/Diretor).' },
+  
+  // Fase 5: Execução
+  { id: 14, section: 'execution', label: 'Publicação no PNCP', completed: false, notes: '', description: 'Dar publicidade no Portal Nacional de Contratações.' },
+  { id: 15, section: 'execution', label: 'Sessão de Dispensa Eletrónica', completed: false, notes: '', description: 'Realização da disputa de lances no sistema.' },
+  { id: 16, section: 'execution', label: 'Julgamento e Habilitação', completed: false, notes: '', description: 'Verificar se a empresa vencedora cumpre os requisitos.' },
+  { id: 17, section: 'execution', label: 'Homologação e Empenho', completed: false, notes: '', description: 'Fechamento do processo e emissão da nota de reserva.' },
+];
+
+const App = () => {
+  const [user, setUser] = useState(null);
+  const [processNumber, setProcessNumber] = useState('');
+  const [currentProcess, setCurrentProcess] = useState(null);
+  const [items, setItems] = useState(initialItems);
+  const [loading, setLoading] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [editingNote, setEditingNote] = useState(null); // ID do item em edição de nota
+  const [expandedSections, setExpandedSections] = useState({
+    planning: true,
+    budget: true,
+    technical: true,
+    governance: true,
+    execution: true
+  });
+
+  // Auth Initialization
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (error) {
+        console.error("Auth error:", error);
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+    return () => unsubscribe();
+  }, []);
+
+  // Listen for Process Data
+  useEffect(() => {
+    if (!user || !currentProcess) return;
+
+    setLoading(true);
+    const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'checklists', currentProcess);
+    
+    const unsubscribe = onSnapshot(docRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        if (data.items) {
+          // Merge initial structure with saved data to ensure new fields are handled
+          const mergedItems = initialItems.map(initItem => {
+            const savedItem = data.items.find(si => si.id === initItem.id);
+            return savedItem ? { ...initItem, ...savedItem } : initItem;
+          });
+          setItems(mergedItems);
+        }
+      } else {
+        setItems(initialItems);
+      }
+      setLoading(false);
+    }, (error) => {
+      console.error("Firestore error:", error);
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [user, currentProcess]);
+
+  const handleLoadProcess = (e) => {
+    e.preventDefault();
+    if (processNumber.trim()) {
+      setCurrentProcess(processNumber.trim().toUpperCase());
+      setEditingNote(null);
+    }
+  };
+
+  const saveToCloud = async (newItems) => {
+    if (!user || !currentProcess) return;
+    setIsSaving(true);
+    try {
+      const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'checklists', currentProcess);
+      await setDoc(docRef, {
+        items: newItems,
+        updatedAt: new Date().toISOString(),
+        processId: currentProcess,
+        updatedBy: user.uid
+      }, { merge: true });
+    } catch (error) {
+      console.error("Save error:", error);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const toggleItem = (id) => {
+    const updatedItems = items.map(item => 
+      item.id === id ? { ...item, completed: !item.completed } : item
+    );
+    setItems(updatedItems);
+    if (currentProcess) saveToCloud(updatedItems);
+  };
+
+  const updateNote = (id, noteText) => {
+    const updatedItems = items.map(item => 
+      item.id === id ? { ...item, notes: noteText } : item
+    );
+    setItems(updatedItems);
+  };
+
+  const handleSaveNote = () => {
+    if (currentProcess) saveToCloud(items);
+    setEditingNote(null);
+  };
+
+  const toggleSection = (sectionId) => {
+    setExpandedSections(prev => ({
+      ...prev,
+      [sectionId]: !prev[sectionId]
+    }));
+  };
+
+  const progress = Math.round((items.filter(i => i.completed).length / items.length) * 100);
+
+  const resetChecklist = () => {
+    if(window.confirm('Deseja resetar todo o progresso e notas?')) {
+      const reseted = items.map(item => ({ ...item, completed: false, notes: '' }));
+      setItems(reseted);
+      if (currentProcess) saveToCloud(reseted);
+    }
+  };
+
+  const sections = [
+    { id: 'planning', label: '1. Planeamento', icon: <FileText className="w-5 h-5 text-blue-500" /> },
+    { id: 'budget', label: '2. Orçamentação', icon: <BadgeDollarSign className="w-5 h-5 text-green-500" /> },
+    { id: 'technical', label: '3. Validação Técnica', icon: <ShieldAlert className="w-5 h-5 text-amber-500" /> },
+    { id: 'governance', label: '4. Governança', icon: <Gavel className="w-5 h-5 text-purple-500" /> },
+    { id: 'execution', label: '5. Seleção e Execução', icon: <CheckSquare className="w-5 h-5 text-emerald-500" /> },
+  ];
+
+  return (
+    <div className="min-h-screen bg-slate-50 p-4 md:p-8 font-sans text-slate-900">
+      <div className="max-w-3xl mx-auto bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-200 print:shadow-none print:border-none">
+        
+        {/* Header */}
+        <div className="bg-gradient-to-r from-blue-800 to-indigo-900 p-6 text-white relative">
+          <div className="flex justify-between items-start mb-4">
+            <div>
+              <h1 className="text-2xl font-bold flex items-center gap-2">
+                <ClipboardCheck className="w-8 h-8" />
+                Dispensa PB: Checklist Digital
+              </h1>
+              <div className="flex items-center gap-2 mt-1">
+                {currentProcess ? (
+                  <span className="bg-white/20 px-2 py-0.5 rounded text-xs font-mono flex items-center gap-1">
+                    <Cloud className="w-3 h-3" /> PROCESSO: {currentProcess}
+                  </span>
+                ) : (
+                  <span className="text-blue-200 text-xs opacity-90 flex items-center gap-1">
+                    <CloudOff className="w-3 h-3" /> Modo Offline
+                  </span>
+                )}
+              </div>
+            </div>
+            <div className="text-right">
+              <span className="text-3xl font-black">{progress}%</span>
+              <p className="text-xs uppercase tracking-wider opacity-70">Concluído</p>
+            </div>
+          </div>
+          
+          <div className="w-full bg-black/20 rounded-full h-3 mb-2">
+            <div 
+              className="bg-emerald-400 h-3 rounded-full transition-all duration-500 ease-out shadow-[0_0_10px_rgba(52,211,153,0.5)]"
+              style={{ width: `${progress}%` }}
+            ></div>
+          </div>
+
+          {isSaving && (
+            <div className="absolute bottom-2 right-4 flex items-center gap-1 text-[10px] text-blue-200 animate-pulse">
+              <Save className="w-3 h-3" /> A sincronizar notas e status...
+            </div>
+          )}
+        </div>
+
+        {/* Toolbar */}
+        <div className="bg-slate-100 p-4 border-b border-slate-200 flex flex-col sm:flex-row gap-3 items-center print:hidden">
+          <form onSubmit={handleLoadProcess} className="flex-1 flex gap-2 w-full">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <input 
+                type="text" 
+                placeholder="Nº do Processo (ex: 2024/001)..." 
+                className="w-full pl-9 pr-4 py-2 bg-white border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                value={processNumber}
+                onChange={(e) => setProcessNumber(e.target.value)}
+              />
+            </div>
+            <button 
+              type="submit"
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-semibold transition-colors flex items-center gap-2"
+            >
+              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Carregar'}
+            </button>
+          </form>
+          
+          <div className="flex gap-2 w-full sm:w-auto">
+            <button onClick={resetChecklist} className="flex-1 sm:flex-none flex items-center justify-center gap-1 px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-50 transition-colors">
+              <RotateCcw className="w-4 h-4" /> Resetar
+            </button>
+            <button onClick={() => window.print()} className="flex-1 sm:flex-none flex items-center justify-center gap-1 px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-50 transition-colors">
+              <Printer className="w-4 h-4" /> Imprimir
+            </button>
+          </div>
+        </div>
+
+        {/* List Content */}
+        <div className="p-4 md:p-6 space-y-6 overflow-y-auto max-h-[60vh] print:max-h-none relative">
+          {loading && (
+            <div className="absolute inset-0 bg-white/60 backdrop-blur-[1px] z-20 flex items-center justify-center">
+              <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+            </div>
+          )}
+
+          {sections.map(section => (
+            <div key={section.id} className="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-sm">
+              <button 
+                onClick={() => toggleSection(section.id)}
+                className="w-full flex items-center justify-between p-4 bg-slate-50 hover:bg-slate-100 transition-colors text-left"
+              >
+                <div className="flex items-center gap-3">
+                  {section.icon}
+                  <span className="font-bold text-slate-700">{section.label}</span>
+                  <span className="bg-slate-200 text-slate-600 text-[10px] px-2 py-0.5 rounded-full font-black">
+                    {items.filter(i => i.section === section.id && i.completed).length}/{items.filter(i => i.section === section.id).length}
+                  </span>
+                </div>
+                {expandedSections[section.id] ? <ChevronUp className="w-5 h-5 text-slate-400" /> : <ChevronDown className="w-5 h-5 text-slate-400" />}
+              </button>
+              
+              {expandedSections[section.id] && (
+                <div className="divide-y divide-slate-100">
+                  {items.filter(i => i.section === section.id).map(item => (
+                    <div key={item.id} className={`p-4 transition-all ${item.completed ? 'bg-emerald-50/10' : 'bg-white'}`}>
+                      <div className="flex items-start gap-4">
+                        <div className="mt-1 cursor-pointer" onClick={() => toggleItem(item.id)}>
+                          {item.completed ? (
+                            <CheckCircle2 className="w-6 h-6 text-emerald-500 fill-emerald-50" />
+                          ) : (
+                            <Circle className="w-6 h-6 text-slate-300 hover:text-blue-400 transition-colors" />
+                          )}
+                        </div>
+                        <div className="flex-1">
+                          <div className="flex justify-between items-start gap-2">
+                            <p className={`font-semibold leading-tight cursor-pointer ${item.completed ? 'text-slate-400 line-through' : 'text-slate-800'}`} onClick={() => toggleItem(item.id)}>
+                              {item.label}
+                            </p>
+                            <button 
+                              onClick={() => setEditingNote(editingNote === item.id ? null : item.id)}
+                              className={`p-1 rounded hover:bg-slate-100 transition-colors print:hidden ${item.notes ? 'text-blue-600' : 'text-slate-300'}`}
+                              title="Adicionar/Editar Nota"
+                            >
+                              <MessageSquare className="w-4 h-4" />
+                            </button>
+                          </div>
+                          <p className="text-xs text-slate-500 mt-1">{item.description}</p>
+                          
+                          {/* Note Display/Edit Area */}
+                          {editingNote === item.id ? (
+                            <div className="mt-3 bg-blue-50 p-3 rounded-lg border border-blue-100 animate-in fade-in slide-in-from-top-1">
+                              <div className="flex items-center gap-2 mb-2 text-blue-700 font-bold text-[10px] uppercase tracking-wider">
+                                <PencilLine className="w-3 h-3" /> Nota / Justificativa
+                              </div>
+                              <textarea 
+                                className="w-full bg-white border border-blue-200 rounded p-2 text-sm text-slate-700 outline-none focus:ring-2 focus:ring-blue-400 min-h-[80px]"
+                                placeholder="Descreva pendências, datas ou justificativas aqui..."
+                                value={item.notes}
+                                onChange={(e) => updateNote(item.id, e.target.value)}
+                              />
+                              <div className="flex justify-end gap-2 mt-2">
+                                <button 
+                                  onClick={() => setEditingNote(null)}
+                                  className="px-3 py-1 text-xs text-slate-500 font-medium hover:bg-slate-200 rounded transition-colors"
+                                >
+                                  Cancelar
+                                </button>
+                                <button 
+                                  onClick={handleSaveNote}
+                                  className="px-3 py-1 text-xs bg-blue-600 text-white font-bold rounded hover:bg-blue-700 transition-colors shadow-sm"
+                                >
+                                  Salvar Nota
+                                </button>
+                              </div>
+                            </div>
+                          ) : item.notes && (
+                            <div className="mt-2 bg-slate-50 border-l-2 border-blue-400 p-2 rounded-r italic text-xs text-slate-600">
+                              <span className="font-bold text-blue-600 not-italic mr-1 text-[9px] uppercase">Nota:</span>
+                              {item.notes}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* Footer */}
+        <div className="p-6 bg-slate-50 border-t border-slate-200 text-center">
+          <div className="flex justify-center items-center gap-2 mb-2">
+            <div className={`w-2 h-2 rounded-full ${user ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'}`}></div>
+            <p className="text-slate-500 text-[10px] uppercase font-bold tracking-widest">
+              {user ? `Ligado à Nuvem (${user.uid.substring(0,6)})` : 'Modo Offline'}
+            </p>
+          </div>
+          <p className="text-slate-400 text-[9px] leading-relaxed max-w-md mx-auto">
+            Utilize este checklist para garantir que todos os passos do fluxo de dispensa foram seguidos. 
+            As notas são ideais para documentar diligências do Comitê Gestor ou atrasos na pesquisa de preços.
+          </p>
+        </div>
+      </div>
+
+      <style>{`
+        @media print {
+          body { background: white; padding: 0; }
+          .min-h-screen { display: block; padding: 0; }
+          .max-w-3xl { max-width: 100%; border: none; shadow: none; margin: 0; }
+          .max-h-\\[60vh\\] { max-height: none !important; overflow: visible !important; }
+        }
+      `}</style>
+    </div>
+  );
+};
+
+export default App;
